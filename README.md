@@ -83,6 +83,29 @@ Load enabled plugins from `init.scm`.
 
 Restart Helix or reload the Steel configuration after installation.
 
+## How Helix Loads the Manager
+
+Helix Steel reads configuration from the Helix config directory. By default, this directory is `${XDG_CONFIG_HOME:-$HOME/.config}/helix`, so the files are usually:
+
+```text
+~/.config/helix/helix.scm
+~/.config/helix/init.scm
+~/.config/helix/helix/plugin-manager.scm
+```
+
+`helix.scm` exposes Scheme functions as Helix commands. The installer adds the plugin manager functions there so commands such as `:plugin-install` and `:plugin-list` are available from Helix's command line.
+
+`init.scm` runs when the Steel configuration is initialized. The installer adds this block so previously installed and enabled plugins are loaded automatically:
+
+```scheme
+(require (only-in "helix/plugin-manager.scm" plugin-load-all))
+(plugin-load-all)
+```
+
+If `HELIX_STEEL_CONFIG` is set, Helix Steel uses that directory instead of the default config directory. In that case, write `helix.scm`, `init.scm`, and the `helix/plugin-manager.scm` module under `$HELIX_STEEL_CONFIG`.
+
+After installation, type the full command names in Helix. There is no `:plugin` command by itself; the provided commands are named with the `plugin-` prefix, for example `:plugin-list` and `:plugin-install`.
+
 ## Usage
 
 You can install from a GitHub `owner/repo` shorthand or from a regular git URL.
