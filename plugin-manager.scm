@@ -1,4 +1,5 @@
 (require "helix/static.scm")
+(require (prefix-in helix.misc. "helix/misc.scm"))
 (require "steel/result")
 (require-builtin steel/filesystem)
 (require-builtin steel/process)
@@ -169,6 +170,84 @@
 (define (run-git args cwd)
   (run-command "git" args cwd))
 
+(define (plugin-update-action action)
+  (let ([value (if action (string-downcase (trim (to-string action))) "")])
+    (cond
+      [(or (equal? value "") (equal? value "ask")) "ask"]
+      [(or (equal? value "y") (equal? value "yes")
+           (equal? value "discard") (equal? value "force") (equal? value "reset")) "discard"]
+      [(or (equal? value "n") (equal? value "no")
+           (equal? value "cancel") (equal? value "skip") (equal? value "keep")) "cancel"]
+      [else
+       (error
+         (string-append
+           "unknown plugin update action: "
+           value
+           ". Use ask, y, or n"))])))
+
+(define (plugin-update-choice->action choice)
+  (let ([value (if choice (string-downcase (trim choice)) "")])
+    (cond
+      [(or (equal? value "discard") (equal? value "d") (equal? value "yes") (equal? value "y"))
+       "discard"]
+      [(or (equal? value "") (equal? value "cancel") (equal? value "c") (equal? value "no") (equal? value "n"))
+       "cancel"]
+      [else #false])))
+
+(define (plugin-directory plugin)
+  (plugin-path (plugin-name plugin)))
+
+(define (ensure-plugin-directory! directory)
+  (unless (path-exists? directory)
+    (error (string-append "plugin directory not found: " directory))))
+
+(define (plugin-local-changes directory)
+  (run-git (list "status" "--porcelain") directory))
+
+(define (plugin-local-changes? directory)
+  (not (equal? (plugin-local-changes directory) "")))
+
+(define (dirty-plugins plugins)
+  (filter
+    (lambda (plugin)
+      (let ([directory (plugin-directory plugin)])
+        (ensure-plugin-directory! directory)
+        (plugin-local-changes? directory)))
+    plugins))
+
+(define (discard-plugin-local-changes! directory)
+  (run-git (list "reset" "--hard") directory)
+  (run-git (list "clean" "-fd") directory))
+
+(define (set-plugin-update-result! thunk)
+  (with-handler
+    (lambda (err)
+      (helix.misc.set-error!
+        (string-append "plugin-update failed: " (to-string err))))
+    (helix.misc.set-status! (thunk))))
+
+(define (open-plugin-update-choice-prompt plugins dirty)
+  (let ([names (string-join (map plugin-name dirty) ", ")])
+    (helix.misc.push-component!
+      (prompt
+        (string-append
+          "Local changes in "
+          names
+          ". Discard local changes and update? [y/N]: ")
+        (lambda (choice)
+          (let ([action (plugin-update-choice->action choice)])
+            (cond
+              [(equal? action "discard")
+               (set-plugin-update-result!
+                 (lambda () (update-plugins plugins "discard")))]
+              [(equal? action "cancel")
+               (helix.misc.set-warning!
+                 "plugin-update canceled; local changes kept")]
+              [else
+               (helix.misc.set-warning!
+                 "plugin-update canceled; type y or n")])))))
+    (string-append "plugin-update choice opened for " names)))
+
 (define (candidate-entries name)
   (list "helix.scm" "init.scm" "plugin.scm" "cog.scm" (string-append name ".scm")))
 
@@ -227,24 +306,44 @@
       (load-plugin-spec plugin)
       (string-append "installed " plugin-name))))
 
-(define (update-plugin-spec plugin)
-  (let ([directory (plugin-path (plugin-name plugin))])
-    (unless (path-exists? directory)
-      (error (string-append "plugin directory not found: " directory)))
-    (run-git (list "pull" "--ff-only") directory)
-    (string-append "updated " (plugin-name plugin))))
+(define (update-plugin-spec plugin [dirty-action "ask"])
+  (let* ([directory (plugin-directory plugin)]
+         [action (plugin-update-action dirty-action)])
+    (ensure-plugin-directory! directory)
+    (if (plugin-local-changes? directory)
+        (cond
+          [(equal? action "discard")
+           (discard-plugin-local-changes! directory)
+           (run-git (list "pull" "--ff-only") directory)
+           (string-append "discarded local changes and updated " (plugin-name plugin))]
+          [(equal? action "cancel")
+           (string-append "skipped " (plugin-name plugin) " (local changes kept)")]
+          [else
+           (open-plugin-update-choice-prompt (list plugin) (list plugin))])
+        (begin
+          (run-git (list "pull" "--ff-only") directory)
+          (string-append "updated " (plugin-name plugin))))))
+
+(define (update-plugins plugins [dirty-action "ask"])
+  (string-join
+    (map (lambda (plugin) (update-plugin-spec plugin dirty-action)) plugins)
+    "\n"))
 
 ;;@doc
 ;; Update one plugin by name, or every installed plugin when no name is given.
-(define (plugin-update [name #false])
-  (let ([plugins (plugin-registry)])
+(define (plugin-update [name #false] [dirty-action "ask"])
+  (let* ([plugins (plugin-registry)]
+         [action (plugin-update-action dirty-action)])
     (if name
         (let ([plugin (find-plugin-spec name plugins)])
           (unless plugin (error (string-append "unknown plugin: " name)))
-          (update-plugin-spec plugin))
+          (update-plugin-spec plugin action))
         (if (null? plugins)
             "No plugins installed"
-            (string-join (map update-plugin-spec plugins) "\n")))))
+            (let ([dirty (dirty-plugins plugins)])
+              (if (and (equal? action "ask") (not (null? dirty)))
+                  (open-plugin-update-choice-prompt plugins dirty)
+                  (update-plugins plugins action)))))))
 
 ;;@doc
 ;; Remove a plugin from the registry. By default, the cloned repository is also deleted.

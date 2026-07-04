@@ -134,6 +134,11 @@ After exposing the functions from `helix.scm`, you can use them from Helix's com
 :plugin-remove repo
 ```
 
+When `plugin-update` finds local changes in a plugin checkout, it opens a
+confirmation prompt before running `git pull`. Type `y` to run
+`git reset --hard` and `git clean -fd` for that plugin checkout, then update.
+Press Enter or type `n` to keep the local changes and skip the update.
+
 ## Plugin Format
 
 The manager loads the selected entry file from the cloned repository as a Scheme module with `require`. The entry file should `provide` the commands or values it wants to expose, like any other Helix Steel plugin.
@@ -185,5 +190,5 @@ When `plugin-manager.scm` changes, an existing symlink-based install picks up th
 ## Notes
 
 - `plugin-disable` only excludes the plugin from future `plugin-load-all` calls. It does not unload definitions already evaluated in the current Steel engine.
-- `plugin-update` runs `git pull --ff-only`. Plugins with local changes may fail to update.
+- `plugin-update` runs `git pull --ff-only`. Plugins with local changes prompt before update.
 - `plugin-remove` deletes the cloned directory by default.
