@@ -437,7 +437,7 @@
 (define (smith-init [prune? 'auto])
   (with-handler
     (lambda (err)
-      (let ([message (string-append "plugin-manager init failed: " (to-string err))])
+      (let ([message (string-append "smith init failed: " (to-string err))])
         (helix.misc.set-warning! message)
         message))
     (let ([should-prune? (if (equal? prune? 'auto)
