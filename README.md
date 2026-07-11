@@ -1,234 +1,189 @@
-# Helix Steel Plugin Manager
+# smith.hx
 
-A small plugin manager for Helix's Steel/Scheme configuration. It clones git repositories and loads their Scheme entry files as Helix plugins.
+A declarative Helix plugin manager backed by Steel's
+[Forge](https://github.com/mattwparas/steel/tree/master/crates/forge).
+Plugins listed in `init.scm` are installed with Forge and loaded at startup.
+Manager-owned packages removed from `init.scm` are uninstalled as a group.
 
 ## Requirements
 
 - Helix built with Steel support
-- `git` available on `PATH`
-- A Steel setup that uses `helix.scm` and `init.scm`
+- Steel's `forge` executable on `PATH`
+
+A full Steel installation includes Forge:
+
+```sh
+git clone https://github.com/mattwparas/steel.git
+cd steel
+cargo xtask install
+```
 
 ## Installation
 
-The most reliable path is the bundled POSIX `sh` installer. With `--configure`, it installs `plugin-manager.scm` and writes the required managed blocks to `helix.scm` and `init.scm`. Existing installer-managed blocks are updated in place instead of duplicated.
+Install this manager directly with Forge:
 
 ```sh
-cd "$HOME/src/helix/helix-steel-plugin-manager"
-sh install.sh --configure
+forge pkg install --git https://github.com/kn66/smith.hx.git
 ```
 
-If `helix/plugin-manager.scm` already exists, the installer stops. Use `--force` to back up the existing file and replace it.
+No copy, symlink, or installer script is required. Forge installs the module as
+`smith.hx/plugin-manager.scm` under Steel's `cogs` directory.
 
-```sh
-sh install.sh --configure --force
-```
+## Declare plugins in init.scm
 
-Use copy mode on systems where symlinks are unavailable or inconvenient.
-
-```sh
-sh install.sh --configure --copy
-```
-
-To install into a specific Helix Steel config directory:
-
-```sh
-sh install.sh --configure --config-dir "$HOME/.config/helix"
-```
-
-For a manual install, symlink this project into a path Helix can find. With the default config directory:
-
-```sh
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/helix/helix"
-ln -sf "$HOME/src/helix/helix-steel-plugin-manager/plugin-manager.scm" \
-  "${XDG_CONFIG_HOME:-$HOME/.config}/helix/helix/plugin-manager.scm"
-```
-
-If you use `HELIX_STEEL_CONFIG`, symlink into that directory instead.
-
-```sh
-mkdir -p "$HELIX_STEEL_CONFIG/helix"
-ln -sf "$HOME/src/helix/helix-steel-plugin-manager/plugin-manager.scm" \
-  "$HELIX_STEEL_CONFIG/helix/plugin-manager.scm"
-```
-
-Expose the commands from `helix.scm`.
+Add the manager import, plugin declarations, synchronization, plugin settings,
+and keybindings to the Helix Steel `init.scm`. This example installs
+[`forest.hx`](https://github.com/Ra77a3l3-jar/forest.hx), uses its persistent
+`snacks` sidebar, hides common generated directories, and binds the explorer to
+`Space e`:
 
 ```scheme
-(require (only-in "helix/plugin-manager.scm"
-                  plugin-install
-                  plugin-manager-init
-                  plugin-manager-update
-                  plugin-ensure
-                  plugin-update
-                  plugin-remove
-                  plugin-enable
-                  plugin-disable
-                  plugin-load
-                  plugin-load-all
-                  plugin-list))
+(require (only-in "smith.hx/plugin-manager.scm"
+                  smith-plugin
+                  smith-prune
+                  smith-init))
 
-(provide plugin-install
-         plugin-manager-init
-         plugin-manager-update
-         plugin-ensure
-         plugin-update
-         plugin-remove
-         plugin-enable
-         plugin-disable
-         plugin-load
-         plugin-load-all
-         plugin-list)
+(smith-plugin "https://github.com/Ra77a3l3-jar/forest.hx.git"
+  ;; Use 'right instead of 'left to move the sidebar.
+  (forest-configure! 'left #:ignore (list ".git" "target" "__pycache__"))
+
+  ;; Select 'snacks (persistent sidebar) or 'mini (floating).
+  (forest-set-style! 'snacks)
+
+  ;; Open or focus forest.hx with Space e in normal mode.
+  (keymap (global)
+          (normal (space (e ":forest-open")))))
+
+;; Synchronize after every smith-plugin declaration has been evaluated.
+(smith-init)
 ```
 
-Load enabled plugins from `init.scm`.
+Each declaration is passed to `forge pkg install --git <git-url>`. Any git URL
+accepted by Forge can be used, including GitLab, Codeberg, self-hosted HTTPS or
+SSH repositories, and local `file://` URLs. GitHub repositories additionally
+support the short `owner/repository` form.
+
+Smith reads the root installation path reported by Forge, obtains the package
+name from that directory, and detects conventional entry files such as
+`helix.scm` or `<package-name>.scm`. This is why the example needs only the
+repository URL even though `forest.hx` declares the package name `forest` and
+uses `forest.scm` as its entry.
+
+For an unconventional package, the explicit form remains available as
+`(smith-plugin (source package-name entry-file [revision]) ...)`.
+
+Configuration forms inside `smith-plugin` are quoted by the macro and evaluated
+only after the package has been installed and loaded. This keeps installation,
+custom variables, and keybindings in one declaration without manual
+`eval-string` calls.
+
+When one or more declarations were evaluated, `smith-init` removes
+manager-owned packages absent from the declarations. Forge packages installed
+independently of this manager are not touched.
+
+Disable pruning temporarily with `(smith-init #false)`. Force pruning
+when there are no declarations with `(smith-init #true)`.
+
+## Optional Helix commands
+
+To use commands such as `:smith-list` and `:smith-prune`, expose the manager
+functions from the Helix Steel `helix.scm`:
 
 ```scheme
-(require (only-in "helix/plugin-manager.scm" plugin-manager-init))
-(plugin-manager-init)
+(require (only-in "smith.hx/plugin-manager.scm"
+                  smith-install
+                  smith-init
+                  smith-self-update
+                  smith-ensure
+                  smith-plugin
+                  smith-configure!
+                  smith-lock
+                  smith-restore
+                  smith-prune
+                  smith-update
+                  smith-remove
+                  smith-enable
+                  smith-disable
+                  smith-load
+                  smith-load-all
+                  smith-list))
+
+(provide smith-install
+         smith-init
+         smith-self-update
+         smith-ensure
+         smith-plugin
+         smith-configure!
+         smith-lock
+         smith-restore
+         smith-prune
+         smith-update
+         smith-remove
+         smith-enable
+         smith-disable
+         smith-load
+         smith-load-all
+         smith-list)
 ```
 
-To keep startup plugin declarations compact, use `plugin-ensure`. The plugin
-name is derived from the GitHub shorthand or git URL, and the entry file is
-detected automatically.
-
-```scheme
-(require (only-in "helix/plugin-manager.scm"
-                  plugin-ensure
-                  plugin-manager-init))
-
-(plugin-ensure "kn66/markdown-planner")
-(plugin-ensure "kn66/helix-dired")
-(plugin-manager-init)
-```
-
-Restart Helix or reload the Steel configuration after installation.
-
-## How Helix Loads the Manager
-
-Helix Steel reads configuration from the Helix config directory. By default, this directory is `${XDG_CONFIG_HOME:-$HOME/.config}/helix`, so the files are usually:
+Available commands include:
 
 ```text
-~/.config/helix/helix.scm
-~/.config/helix/init.scm
-~/.config/helix/helix/plugin-manager.scm
+:smith-list
+:smith-install owner/repo
+:smith-update
+:smith-update package-name
+:smith-remove package-name
+:smith-prune
+:smith-disable package-name
+:smith-enable package-name
+:smith-self-update
+:smith-lock
+:smith-restore
 ```
 
-`helix.scm` exposes Scheme functions as Helix commands. The installer adds the plugin manager functions there so commands such as `:plugin-install` and `:plugin-list` are available from Helix's command line.
+`smith-update` reinstalls managed plugins with Forge's `--force` option.
+`smith-self-update` similarly reinstalls this manager through Forge; reload
+the Steel configuration afterward.
 
-`init.scm` runs when the Steel configuration is initialized. The installer adds this short block so previously installed and enabled plugins are loaded automatically:
+## Lock file
 
-```scheme
-(require (only-in "helix/plugin-manager.scm" plugin-manager-init))
-(plugin-manager-init)
-```
-
-`plugin-manager-init` wraps startup loading and reports plugin load failures as a Helix warning instead of making `init.scm` harder to read.
-
-If `HELIX_STEEL_CONFIG` is set, Helix Steel uses that directory instead of the default config directory. In that case, write `helix.scm`, `init.scm`, and the `helix/plugin-manager.scm` module under `$HELIX_STEEL_CONFIG`.
-
-After installation, type the full command names in Helix. There is no `:plugin` command by itself; the provided commands are named with the `plugin-` prefix, for example `:plugin-list` and `:plugin-install`.
-
-## Usage
-
-You can install from a GitHub `owner/repo` shorthand or from a regular git URL.
-
-```scheme
-(plugin-install "owner/repo")
-(plugin-install "https://github.com/owner/repo.git")
-```
-
-Pass an explicit name, entry file, or branch when needed.
-
-```scheme
-(plugin-install "https://github.com/owner/repo.git" "repo-name" "plugin/main.scm")
-(plugin-install "owner/repo" "repo-name" "helix.scm" "main")
-```
-
-After exposing the functions from `helix.scm`, you can use them from Helix's command line.
+Create a lock file from the exact commits currently installed by Forge:
 
 ```text
-:plugin-install owner/repo
-:plugin-list
-:plugin-ensure owner/repo
-:plugin-update
-:plugin-manager-update
-:plugin-load repo
-:plugin-disable repo
-:plugin-enable repo
-:plugin-remove repo
+:smith-lock
 ```
 
-When `plugin-update` finds local changes in a plugin checkout, it keeps those
-changes and prints the command to run if you want to discard them. Use
-`:plugin-update <name> discard` to run `git reset --hard`, `git clean -fd`, and
-then update that checkout.
+Smith writes `<helix-config>/steel/plugins/smith-lock.scm`. Commit this file
+with your Helix configuration to reproduce the same plugin versions elsewhere.
+Each entry records the package name, source URL, entry file, enabled state, and
+the installed git commit SHA.
 
-`plugin-install` is idempotent for the same plugin name and source. If the plugin is already registered and its checkout exists, it reloads the plugin and returns `already installed <name>` instead of cloning again. If the checkout exists but the registry entry is missing, it registers that checkout and loads it.
-
-`plugin-ensure` wraps `plugin-install` for startup use. It accepts the same
-optional arguments, but most plugins only need `(plugin-ensure "owner/repo")`.
-Install failures are reported as Helix warnings so one unavailable plugin does
-not stop the rest of `init.scm`.
-
-Update the plugin manager itself from Helix with:
+Restore every managed plugin at the locked commits with:
 
 ```text
-:plugin-manager-update
+:smith-restore
 ```
 
-The installer writes the manager source checkout path to `helix/plugin-manager-source`, so `plugin-manager-update` can run `git pull --ff-only` in that checkout. Symlink installs pick up the new file immediately after restart or Steel reload. Copy installs are refreshed by copying the updated `plugin-manager.scm` into the Helix config directory.
-
-## Plugin Format
-
-The manager loads the selected entry file from the cloned repository as a Scheme module with `require`. The entry file should `provide` the commands or values it wants to expose, like any other Helix Steel plugin.
-
-```scheme
-(provide hello-plugin)
-
-(define (hello-plugin)
-  "hello from plugin")
-```
-
-If no entry file is given, the manager uses the first existing file in this order:
-
-- `helix.scm`
-- `init.scm`
-- `plugin.scm`
-- `cog.scm`
-- `<plugin-name>.scm`
+Restoration runs `forge pkg install --git <source> --rev <sha> --force`, checks
+out and verifies the exact locked SHA in the installed package, replaces the
+Smith registry only after all packages restore successfully, and reloads enabled
+plugins. Both commands optionally accept another lock-file path when called
+from Scheme.
 
 ## Storage
 
-Installed plugins and the registry are stored under the parent directory of `get-init-scm-path`.
+The manager stores its ownership and load metadata at:
 
 ```text
-<steel-config-dir>/steel/plugins/
-<steel-config-dir>/steel/plugins/registry.scm
+<helix-config>/steel/plugins/registry.scm
 ```
 
-With the default Helix config layout, this is usually:
+Forge owns the installed package files:
 
 ```text
-~/.config/helix/steel/plugins/
-~/.config/helix/steel/plugins/registry.scm
+<STEEL_HOME>/cogs/<package-name>/
 ```
 
-## Project Maintenance
-
-This repository is intended to be managed separately from the Helix source tree.
-
-```sh
-cd "$HOME/src/helix/helix-steel-plugin-manager"
-git init
-git add README.md plugin-manager.scm install.sh
-git commit -m "Initial plugin manager"
-```
-
-When `plugin-manager.scm` changes, run `:plugin-manager-update` from Helix or run `git pull --ff-only` in this repository and rerun `sh install.sh --configure`. Symlink-based installs pick up the updated file after Helix is restarted or the Steel configuration is reloaded. Copy-based installs are refreshed by `:plugin-manager-update` when the installer metadata is present, or by rerunning `sh install.sh --configure --copy`.
-
-## Notes
-
-- `plugin-disable` only excludes the plugin from future `plugin-load-all` calls. It does not unload definitions already evaluated in the current Steel engine.
-- `plugin-update` runs `git pull --ff-only`. Plugins with local changes are kept unless you pass `discard`.
-- `plugin-manager-update` runs `git pull --ff-only` for the plugin manager checkout. If that checkout has local changes, use `:plugin-manager-update discard` to reset them before updating.
-- `plugin-remove` deletes the cloned directory by default.
+This registry boundary prevents pruning from uninstalling unrelated Forge
+packages.

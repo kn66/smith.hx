@@ -4,80 +4,93 @@
 (require-builtin steel/filesystem)
 (require-builtin steel/process)
 
-(provide plugin-root
-         plugin-registry-path
-         plugin-registry
-         plugin-manager-init
-         plugin-manager-update
-         plugin-ensure
-         plugin-list
-         plugin-install
-         plugin-update
-         plugin-remove
-         plugin-enable
-         plugin-disable
-         plugin-load
-         plugin-load-all)
+(provide smith-root
+         smith-registry-path
+         smith-registry
+         smith-lock-path
+         smith-lock
+         smith-restore
+         smith-init
+         smith-self-update
+         smith-ensure
+         smith-plugin
+         smith-configure!
+         smith-prune
+         smith-list
+         smith-install
+         smith-update
+         smith-remove
+         smith-enable
+         smith-disable
+         smith-load
+         smith-load-all)
 
-(define (path-join . parts)
+(define (smith-path-join . parts)
   (cond
     [(null? parts) ""]
     [(null? (cdr parts)) (car parts)]
     [else
      (let ([left (trim-end-matches (car parts) "/")]
-           [right (trim-start-matches (apply path-join (cdr parts)) "/")])
+           [right (trim-start-matches (apply smith-path-join (cdr parts)) "/")])
        (string-append left "/" right))]))
 
-(define (config-root)
+(define (smith-config-root)
   (parent-name (get-init-scm-path)))
 
 ;;@doc
-;; Directory where plugin repositories are cloned.
-(define (plugin-root)
-  (path-join (config-root) "steel" "plugins"))
+;; Directory where this manager keeps its registry and command logs.
+(define (smith-root)
+  (smith-path-join (smith-config-root) "steel" "plugins"))
 
 ;;@doc
 ;; File where the plugin manager stores installed plugin metadata.
-(define (plugin-registry-path)
-  (path-join (plugin-root) "registry.scm"))
+(define (smith-registry-path)
+  (smith-path-join (smith-root) "registry.scm"))
 
-(define (plugin-manager-installed-path)
-  (path-join (config-root) "helix" "plugin-manager.scm"))
+(define (smith-lock-path)
+  (smith-path-join (smith-root) "smith-lock.scm"))
 
-(define (plugin-manager-source-path)
-  (path-join (config-root) "helix" "plugin-manager-source"))
+;; Forge installs packages below Steel's cogs directory.
+(define (smith-forge-root)
+  (smith-path-join (steel-home-location) "cogs"))
 
-(define (ensure-plugin-root!)
-  (unless (path-exists? (plugin-root))
-    (create-directory! (plugin-root))))
+(define *smith-source*
+  "https://github.com/kn66/smith.hx.git")
 
-(define (file->string path)
+(define (smith-ensure-root!)
+  (unless (path-exists? (smith-root))
+    (create-directory! (smith-root))))
+
+(define (smith-file->string path)
   (let ([port (open-input-file path)])
     (let ([contents (read-port-to-string port)])
       (close-port port)
       contents)))
 
-(define (string->file path contents)
-  (let ([port (open-output-file path #:exists 'truncate)])
-    (display contents port)
-    (close-port port)))
-
-(define (make-plugin name source entry branch enabled?)
+(define (smith-make-plugin name source entry branch enabled?)
   (list name source entry branch enabled?))
 
-(define (plugin-name plugin) (list-ref plugin 0))
-(define (plugin-source plugin) (list-ref plugin 1))
-(define (plugin-entry plugin) (list-ref plugin 2))
-(define (plugin-branch plugin) (list-ref plugin 3))
-(define (plugin-enabled? plugin) (list-ref plugin 4))
+(define (smith-plugin-name plugin) (list-ref plugin 0))
+(define (smith-plugin-source plugin) (list-ref plugin 1))
+(define (smith-plugin-entry plugin) (list-ref plugin 2))
+(define (smith-plugin-branch plugin) (list-ref plugin 3))
+(define (smith-plugin-enabled? plugin) (list-ref plugin 4))
 
-(define (plugin-path name)
-  (path-join (plugin-root) name))
+(define (smith-plugin-path name)
+  (smith-path-join (smith-forge-root) name))
+
+;; Names declared by smith-ensure during the current init.scm evaluation.
+;; The registry remains the durable record of packages managed by this module.
+(define *smith-declared-plugin-names* '())
+
+(define (smith-declare-plugin! name)
+  (unless (member name *smith-declared-plugin-names*)
+    (set! *smith-declared-plugin-names* (cons name *smith-declared-plugin-names*))))
 
 ;;@doc
 ;; Return the raw plugin registry as a list.
-(define (plugin-registry)
-  (let ([registry (plugin-registry-path)])
+(define (smith-registry)
+  (let ([registry (smith-registry-path)])
     (if (path-exists? registry)
         (let ([port (open-input-file registry)])
           (let ([plugins (read port)])
@@ -85,71 +98,77 @@
             plugins))
         '())))
 
-(define (save-registry! plugins)
-  (ensure-plugin-root!)
-  (let ([port (open-output-file (plugin-registry-path) #:exists 'truncate)])
+(define (smith-save-registry! plugins)
+  (smith-ensure-root!)
+  (let ([port (open-output-file (smith-registry-path) #:exists 'truncate)])
     (write plugins port)
     (display "\n" port)
     (close-port port)))
 
-(define (remove-plugin-spec name plugins)
+(define (smith-remove-spec name plugins)
   (cond
     [(null? plugins) '()]
-    [(equal? name (plugin-name (car plugins))) (remove-plugin-spec name (cdr plugins))]
-    [else (cons (car plugins) (remove-plugin-spec name (cdr plugins)))]))
+    [(equal? name (smith-plugin-name (car plugins))) (smith-remove-spec name (cdr plugins))]
+    [else (cons (car plugins) (smith-remove-spec name (cdr plugins)))]))
 
-(define (upsert-plugin-spec plugin plugins)
-  (cons plugin (remove-plugin-spec (plugin-name plugin) plugins)))
+(define (smith-upsert-spec plugin plugins)
+  (cons plugin (smith-remove-spec (smith-plugin-name plugin) plugins)))
 
-(define (find-plugin-spec name plugins)
+(define (smith-find-spec name plugins)
   (cond
     [(null? plugins) #false]
-    [(equal? name (plugin-name (car plugins))) (car plugins)]
-    [else (find-plugin-spec name (cdr plugins))]))
+    [(equal? name (smith-plugin-name (car plugins))) (car plugins)]
+    [else (smith-find-spec name (cdr plugins))]))
 
-(define (replace-plugin-spec plugin plugins)
-  (upsert-plugin-spec plugin plugins))
+(define (smith-find-spec-by-source source plugins)
+  (cond
+    [(null? plugins) #false]
+    [(equal? source (smith-plugin-source (car plugins))) (car plugins)]
+    [else (smith-find-spec-by-source source (cdr plugins))]))
 
-(define (valid-plugin-name? name)
+(define (smith-replace-spec plugin plugins)
+  (smith-upsert-spec plugin plugins))
+
+(define (smith-valid-name? name)
   (and (not (equal? name ""))
        (not (string-contains? name "/"))
        (not (string-contains? name "\\"))
        (not (string-contains? name ":"))
        (not (string-contains? name ".."))))
 
-(define (assert-valid-plugin-name! name)
-  (unless (valid-plugin-name? name)
+(define (smith-assert-valid-name! name)
+  (unless (smith-valid-name? name)
     (error (string-append "invalid plugin name: " name))))
 
-(define (last-item items)
+(define (smith-last-item items)
   (if (null? (cdr items))
       (car items)
-      (last-item (cdr items))))
+      (smith-last-item (cdr items))))
 
-(define (strip-url-suffixes source)
+(define (smith-strip-url-suffixes source)
   (let* ([no-query (car (split-many source "?"))]
          [no-fragment (car (split-many no-query "#"))])
     (trim-end-matches no-fragment "/")))
 
-(define (derive-plugin-name source)
-  (let* ([cleaned (strip-url-suffixes source)]
-         [last-path-part (last-item (split-many cleaned "/"))]
-         [last-scp-part (last-item (split-many last-path-part ":"))]
+(define (smith-derive-name source)
+  (let* ([cleaned (smith-strip-url-suffixes source)]
+         [last-path-part (smith-last-item (split-many cleaned "/"))]
+         [last-scp-part (smith-last-item (split-many last-path-part ":"))]
          [name (trim-end-matches last-scp-part ".git")])
-    (assert-valid-plugin-name! name)
+    (smith-assert-valid-name! name)
     name))
 
-(define (github-shorthand? source)
+(define (smith-github-shorthand? source)
   (and (not (string-contains? source "://"))
        (not (starts-with? source "git@"))
        (= (length (split-many source "/")) 2)))
 
-(define (normalize-source source)
-  (if (github-shorthand? source)
+(define (smith-normalize-source source)
+  (if (smith-github-shorthand? source)
       (string-append "https://github.com/" source ".git")
       source))
 
-(define (scheme-quote-string value)
+(define (smith-quote-string value)
   (string-append "\""
                  (string-replace
                    (string-replace value "\\" "\\\\")
@@ -157,18 +176,18 @@
                    "\\\"")
                  "\""))
 
-(define (run-command program args cwd)
-  (ensure-plugin-root!)
-  (let* ([stdout-path (path-join (plugin-root) ".last-command.stdout")]
-         [stderr-path (path-join (plugin-root) ".last-command.stderr")]
+(define (smith-run-command program args cwd)
+  (smith-ensure-root!)
+  (let* ([stdout-path (smith-path-join (smith-root) ".last-command.stdout")]
+         [stderr-path (smith-path-join (smith-root) ".last-command.stderr")]
          [builder (command program args)])
     (when cwd (with-current-dir builder cwd))
     (with-stdout builder (open-output-file stdout-path #:exists 'truncate))
     (with-stderr builder (open-output-file stderr-path #:exists 'truncate))
     (let* ([child (unwrap-ok (spawn-process builder))]
            [status (unwrap-ok (wait child))]
-           [stdout (file->string stdout-path)]
-           [stderr (file->string stderr-path)])
+           [stdout (smith-file->string stdout-path)]
+           [stderr (smith-file->string stderr-path)])
       (if (equal? status 0)
           stdout
           (error
@@ -179,339 +198,438 @@
                            stdout
                            stderr))))))
 
-(define (run-git args cwd)
-  (run-command "git" args cwd))
+(define (smith-run-forge args)
+  (smith-run-command "forge" args #false))
 
-(define (plugin-update-action action)
-  (let ([value (if action (string-downcase (trim (to-string action))) "")])
-    (cond
-      [(or (equal? value "") (equal? value "ask")) "ask"]
-      [(or (equal? value "y") (equal? value "yes")
-           (equal? value "discard") (equal? value "force") (equal? value "reset")) "discard"]
-      [(or (equal? value "n") (equal? value "no")
-           (equal? value "cancel") (equal? value "skip") (equal? value "keep")) "cancel"]
-      [else
-       (error
-         (string-append
-           "unknown plugin update action: "
-           value
-           ". Use ask, y, or n"))])))
+(define (smith-installed-path output)
+  (let ([matches
+         (filter (lambda (line) (string-contains? line "Installed package to:"))
+                 (split-many output "\n"))])
+    (if (null? matches)
+        #false
+        (trim (smith-last-item
+                (split-many (smith-last-item matches) "Installed package to:"))))))
 
-(define (plugin-directory plugin)
-  (plugin-path (plugin-name plugin)))
+(define (smith-forge-install-source! source branch force?)
+  (let* ([args (append (list "pkg" "install" "--git" source)
+                       (if branch (list "--rev" branch) '())
+                       (if force? (list "--force") '()))]
+         [output (smith-run-forge args)]
+         [installed-path (smith-installed-path output)])
+    (unless installed-path
+      (error "Forge did not report the installed package path"))
+    installed-path))
 
-(define (plugin-manager-source-directory)
-  (let ([source-path (plugin-manager-source-path)])
-    (if (path-exists? source-path)
-        (trim (file->string source-path))
-        (parent-name (plugin-manager-installed-path)))))
-
-(define (ensure-plugin-directory! directory)
-  (unless (path-exists? directory)
-    (error (string-append "plugin directory not found: " directory))))
-
-(define (plugin-local-changes directory)
-  (run-git (list "status" "--porcelain") directory))
-
-(define (plugin-local-changes? directory)
-  (not (equal? (plugin-local-changes directory) "")))
-
-(define (dirty-plugins plugins)
-  (filter
-    (lambda (plugin)
-      (let ([directory (plugin-directory plugin)])
-        (ensure-plugin-directory! directory)
-        (plugin-local-changes? directory)))
-    plugins))
-
-(define (discard-plugin-local-changes! directory)
-  (run-git (list "reset" "--hard") directory)
-  (run-git (list "clean" "-fd") directory))
-
-(define (plugin-update-local-changes-message dirty)
-  (let ([names (string-join (map plugin-name dirty) ", ")])
-    (if (= (length dirty) 1)
+(define (smith-forge-install! plugin force?)
+  (let ([installed-path
+         (smith-forge-install-source! (smith-plugin-source plugin)
+                                      (smith-plugin-branch plugin)
+                                      force?)])
+    (unless (path-exists? (smith-plugin-directory plugin))
+      (error
         (string-append
-          "local changes in "
-          names
-          "; run :plugin-update "
-          (plugin-name (car dirty))
-          " discard to reset them before updating")
-        (string-append
-          "local changes in "
-          names
-          "; update each dirty plugin with :plugin-update <name> discard"))))
+          "Forge installed package name does not match expected name: "
+          (smith-plugin-name plugin)
+          ". Installed to "
+          installed-path
+          "; check package-name in cog.scm.")))))
 
-(define (candidate-entries name)
-  (list "helix.scm" "init.scm" "plugin.scm" "cog.scm" (string-append name ".scm")))
+(define (smith-plugin-directory plugin)
+  (smith-plugin-path (smith-plugin-name plugin)))
 
-(define (first-existing-entry plugin-directory entries)
+(define (smith-candidate-entries name)
+  (list "helix.scm" "init.scm" "plugin.scm" (string-append name ".scm") "cog.scm"))
+
+(define (smith-first-existing-entry smith-plugin-directory entries)
   (cond
     [(null? entries) #false]
-    [(path-exists? (path-join plugin-directory (car entries))) (car entries)]
-    [else (first-existing-entry plugin-directory (cdr entries))]))
+    [(path-exists? (smith-path-join smith-plugin-directory (car entries))) (car entries)]
+    [else (smith-first-existing-entry smith-plugin-directory (cdr entries))]))
 
-(define (resolve-entry plugin-directory requested-entry name)
+(define (smith-resolve-entry smith-plugin-directory requested-entry name)
   (cond
     [requested-entry
-     (if (path-exists? (path-join plugin-directory requested-entry))
+     (if (path-exists? (smith-path-join smith-plugin-directory requested-entry))
          requested-entry
          (error (string-append "plugin entry not found: " requested-entry)))]
     [else
-     (let ([entry (first-existing-entry plugin-directory (candidate-entries name))])
+     (let ([entry (smith-first-existing-entry smith-plugin-directory (smith-candidate-entries name))])
        (if entry
            entry
            (error
              (string-append
-               "plugin entry not found. Expected helix.scm, init.scm, plugin.scm, cog.scm, or "
+               "plugin entry not found. Expected helix.scm, init.scm, plugin.scm, "
                name
-               ".scm"))))]))
+               ".scm, or cog.scm"))))]))
 
-(define (resolve-existing-entry plugin-directory plugin requested-entry)
+(define (smith-resolve-existing-entry smith-plugin-directory plugin requested-entry)
   (cond
     [requested-entry
-     (resolve-entry plugin-directory requested-entry (plugin-name plugin))]
-    [(path-exists? (path-join plugin-directory (plugin-entry plugin)))
-     (plugin-entry plugin)]
+     (smith-resolve-entry smith-plugin-directory requested-entry (smith-plugin-name plugin))]
+    [(path-exists? (smith-path-join smith-plugin-directory (smith-plugin-entry plugin)))
+     (smith-plugin-entry plugin)]
     [else
-     (resolve-entry plugin-directory #false (plugin-name plugin))]))
+     (smith-resolve-entry smith-plugin-directory #false (smith-plugin-name plugin))]))
 
-(define (load-plugin-spec plugin)
-  (let* ([entry-path (path-join (plugin-path (plugin-name plugin)) (plugin-entry plugin))]
-         [require-expression (string-append "(require " (scheme-quote-string entry-path) ")")])
+(define (smith-load-spec plugin)
+  (let* ([entry-path (smith-path-join (smith-plugin-path (smith-plugin-name plugin)) (smith-plugin-entry plugin))]
+         [require-expression (string-append "(require " (smith-quote-string entry-path) ")")])
     (unless (path-exists? entry-path)
       (error (string-append "plugin entry not found: " entry-path)))
     (eval-string require-expression)
-    (string-append "loaded " (plugin-name plugin))))
+    (string-append "loaded " (smith-plugin-name plugin))))
 
-(define (install-existing-plugin plugin target entry branch)
-  (let ([resolved-entry (resolve-existing-entry target plugin entry)])
-    (when (and branch (not (equal? branch (plugin-branch plugin))))
+(define (smith-install-existing plugin target entry branch)
+  (let ([resolved-entry (smith-resolve-existing-entry target plugin entry)])
+    (when (and branch (not (equal? branch (smith-plugin-branch plugin))))
       (error
         (string-append
           "plugin already installed with a different branch: "
-          (plugin-name plugin))))
-    (let ([updated (make-plugin (plugin-name plugin)
-                                (plugin-source plugin)
+          (smith-plugin-name plugin))))
+    (let ([updated (smith-make-plugin (smith-plugin-name plugin)
+                                (smith-plugin-source plugin)
                                 resolved-entry
-                                (plugin-branch plugin)
+                                (smith-plugin-branch plugin)
                                 #true)])
-      (save-registry! (replace-plugin-spec updated (plugin-registry)))
-      (load-plugin-spec updated)
-      (string-append "already installed " (plugin-name plugin)))))
+      (smith-save-registry! (smith-replace-spec updated (smith-registry)))
+      (smith-load-spec updated)
+      (string-append "already installed " (smith-plugin-name plugin)))))
 
 ;;@doc
-;; Clone a plugin repository and load its entry file.
+;; Install a plugin through Forge and load its entry file.
 ;;
 ;; `source` can be a full git URL or a GitHub shorthand such as "owner/repo".
-;; `name`, `entry`, and `branch` are optional. The entry defaults to the first
+;; `name`, `entry`, and revision are optional. The entry defaults to the first
 ;; existing file from helix.scm, init.scm, plugin.scm, cog.scm, or <name>.scm.
-(define (plugin-install source [name #false] [entry #false] [branch #false])
-  (let* ([url (normalize-source source)]
-         [plugin-name (or name (derive-plugin-name source))]
-         [target (plugin-path plugin-name)]
-         [plugins (plugin-registry)]
-         [existing (find-plugin-spec plugin-name plugins)])
-    (assert-valid-plugin-name! plugin-name)
-    (ensure-plugin-root!)
+(define (smith-install source [name #false] [entry #false] [branch #false])
+  (let* ([url (smith-normalize-source source)]
+         [plugins (smith-registry)]
+         [existing (if name
+                       (smith-find-spec name plugins)
+                       (smith-find-spec-by-source url plugins))])
+    (smith-ensure-root!)
     (cond
       [existing
-       (unless (equal? url (plugin-source existing))
+       (unless (equal? url (smith-plugin-source existing))
          (error
            (string-append
              "plugin already installed with a different source: "
-             plugin-name)))
+             (smith-plugin-name existing))))
+       (let ([target (smith-plugin-directory existing)])
        (if (path-exists? target)
-           (install-existing-plugin existing target entry branch)
+           (smith-install-existing existing target entry branch)
            (begin
-             (run-git
-               (append (list "clone")
-                       (if (or branch (plugin-branch existing))
-                           (list "--branch" (or branch (plugin-branch existing)))
-                           '())
-                       (list url target))
-               #false)
-             (install-existing-plugin existing target entry branch)))]
-      [(path-exists? target)
-       (let* ([resolved-entry (resolve-entry target entry plugin-name)]
-              [plugin (make-plugin plugin-name url resolved-entry branch #true)])
-         (save-registry! (upsert-plugin-spec plugin plugins))
-         (load-plugin-spec plugin)
-         (string-append "registered existing " plugin-name))]
+             (smith-forge-install! existing #false)
+             (smith-install-existing existing target entry branch))))]
+      [(and name (path-exists? (smith-plugin-path name)))
+       (smith-assert-valid-name! name)
+       (let ([target (smith-plugin-path name)])
+       (let* ([resolved-entry (smith-resolve-entry target entry name)]
+              [plugin (smith-make-plugin name url resolved-entry branch #true)])
+         (smith-save-registry! (smith-upsert-spec plugin plugins))
+         (smith-load-spec plugin)
+           (string-append "registered existing " name)))]
       [else
-       (run-git
-         (append (list "clone")
-                 (if branch (list "--branch" branch) '())
-                 (list url target))
-         #false)
-       (let* ([resolved-entry (resolve-entry target entry plugin-name)]
-              [plugin (make-plugin plugin-name url resolved-entry branch #true)])
-         (save-registry! (upsert-plugin-spec plugin (plugin-registry)))
-         (load-plugin-spec plugin)
-         (string-append "installed " plugin-name))])))
+       ;; Force the first unmanaged install so Forge always reports the root
+       ;; package path, even when it was installed independently beforehand.
+       (let* ([target (smith-forge-install-source! url branch (not name))]
+              [smith-plugin-name (or name (file-name target))]
+              [expected-target (smith-plugin-path smith-plugin-name)])
+         (smith-assert-valid-name! smith-plugin-name)
+         (unless (equal? target expected-target)
+           (error (string-append "Forge package name does not match explicit name: "
+                                 smith-plugin-name
+                                 "; installed to "
+                                 target)))
+         (let* ([resolved-entry (smith-resolve-entry target entry smith-plugin-name)]
+                [plugin (smith-make-plugin smith-plugin-name url resolved-entry branch #true)])
+         (smith-save-registry! (smith-upsert-spec plugin (smith-registry)))
+         (smith-load-spec plugin)
+           (string-append "installed " smith-plugin-name)))])))
 
 ;;@doc
 ;; Ensure a plugin is installed and loaded. This is intended for init.scm.
-(define (plugin-ensure source [name #false] [entry #false] [branch #false])
-  (let ([label (if name name source)])
+(define (smith-ensure source [name #false] [entry #false] [branch #false])
+  (let* ([url (smith-normalize-source source)]
+         [known (if name
+                    (smith-find-spec name (smith-registry))
+                    (smith-find-spec-by-source url (smith-registry)))]
+         [label (or name source)])
+    (when known (smith-declare-plugin! (smith-plugin-name known)))
     (with-handler
       (lambda (err)
         (let ([message (string-append "plugin install skipped: " label ": " (to-string err))])
           (helix.misc.set-warning! message)
           message))
-      (plugin-install source name entry branch))))
+      (let ([result (smith-install source name entry branch)]
+            [installed (if name
+                           (smith-find-spec name (smith-registry))
+                           (smith-find-spec-by-source url (smith-registry)))])
+        (when installed (smith-declare-plugin! (smith-plugin-name installed)))
+        result))))
 
 ;;@doc
-;; Load enabled plugins. This is the shortest stable entry point for init.scm.
-(define (plugin-manager-init)
+;; Evaluate configuration forms after a plugin has been installed and loaded.
+(define (smith-configure! name forms)
+  (if (path-exists? (smith-plugin-path name))
+      (with-handler
+        (lambda (err)
+          (let ([message
+                 (string-append "plugin configuration skipped: "
+                                name
+                                ": "
+                                (to-string err))])
+            (helix.misc.set-warning! message)
+            message))
+        (map (lambda (form) (eval-string (to-string form))) forms))
+      (let ([message (string-append "plugin configuration skipped: "
+                                    name
+                                    ": package is not installed")])
+        (helix.misc.set-warning! message)
+        message)))
+
+(define (smith-configure-source! source forms)
+  (let* ([url (smith-normalize-source source)]
+         [plugin (smith-find-spec-by-source url (smith-registry))])
+    (if plugin
+        (smith-configure! (smith-plugin-name plugin) forms)
+        (let ([message (string-append "plugin configuration skipped: "
+                                      source
+                                      ": package is not registered")])
+          (helix.misc.set-warning! message)
+          message))))
+
+;;@doc
+;; Declare, install, load, and configure a plugin in one init.scm block.
+;; The tuple is (source package-name entry-file) or
+;; (source package-name entry-file revision).
+(define-syntax smith-plugin
+  (syntax-rules ()
+    [(smith-plugin (source name entry branch) form ...)
+     (begin
+       (smith-ensure source name entry branch)
+       (smith-configure! name '(form ...)))]
+    [(smith-plugin (source name entry) form ...)
+     (begin
+       (smith-ensure source name entry)
+       (smith-configure! name '(form ...)))]
+    [(smith-plugin source form ...)
+     (begin
+       (smith-ensure source)
+       (smith-configure-source! source '(form ...)))]))
+
+;;@doc
+;; Remove every manager-owned Forge package not declared by smith-ensure during
+;; the current init.scm evaluation. Other Forge packages are never touched.
+(define (smith-prune)
+  (let ([stale (filter (lambda (plugin)
+                         (not (member (smith-plugin-name plugin) *smith-declared-plugin-names*)))
+                       (smith-registry))])
+    (if (null? stale)
+        "No undeclared plugins"
+        (string-join
+          (map (lambda (plugin) (smith-remove (smith-plugin-name plugin))) stale)
+          "\n"))))
+
+;; Load declared plugins. With the default 'auto mode, undeclared manager-owned
+;; packages are removed when init.scm contains at least one smith-ensure call.
+;; Pass #true or #false to explicitly enable or disable pruning.
+(define (smith-init [prune? 'auto])
   (with-handler
     (lambda (err)
       (let ([message (string-append "plugin-manager init failed: " (to-string err))])
         (helix.misc.set-warning! message)
         message))
-    (plugin-load-all)))
+    (let ([should-prune? (if (equal? prune? 'auto)
+                             (not (null? *smith-declared-plugin-names*))
+                             prune?)])
+      (let ([prune-result (if should-prune? (smith-prune) #false)]
+          [load-result
+           (if (null? *smith-declared-plugin-names*)
+               (smith-load-all)
+               (smith-load-enabled
+                 (filter (lambda (plugin)
+                           (member (smith-plugin-name plugin) *smith-declared-plugin-names*))
+                         (smith-registry))))])
+      (if prune-result
+          (string-append prune-result "\n"
+                         (if (list? load-result)
+                             (if (null? load-result)
+                                 "No enabled plugins"
+                                 (string-join load-result "\n"))
+                             load-result))
+          (if (list? load-result)
+              (if (null? load-result)
+                  "No enabled plugins"
+                  (string-join load-result "\n"))
+              load-result))))))
 
 ;;@doc
-;; Update the plugin manager repository and refresh a copy-based install.
-(define (plugin-manager-update [dirty-action "ask"])
-  (let* ([source-directory (plugin-manager-source-directory)]
-         [source-file (path-join source-directory "plugin-manager.scm")]
-         [target-file (plugin-manager-installed-path)]
-         [action (plugin-update-action dirty-action)])
-    (unless (path-exists? (path-join source-directory ".git"))
-      (error
-        (string-append
-          "plugin manager source is not a git checkout: "
-          source-directory)))
-    (unless (path-exists? source-file)
-      (error (string-append "plugin-manager.scm not found: " source-file)))
-    (if (and (plugin-local-changes? source-directory)
-             (not (equal? action "discard")))
-        (if (equal? action "ask")
-            "plugin manager has local changes; run :plugin-manager-update discard to reset them"
-            "skipped plugin manager update (local changes kept)")
-        (begin
-          (when (equal? action "discard")
-            (discard-plugin-local-changes! source-directory))
-          (run-git (list "pull" "--ff-only") source-directory)
-          (when (not (equal? (file->string source-file) (file->string target-file)))
-            (string->file target-file (file->string source-file)))
-          (string-append
-            "updated plugin manager from "
-            source-directory
-            "; restart Helix or reload Steel configuration to use new definitions")))))
+;; Update this manager through Forge. The current Steel engine keeps the loaded
+;; definitions until the configuration is reloaded.
+(define (smith-self-update [ignored #false])
+  (let ([manager (smith-make-plugin "smith.hx"
+                              *smith-source*
+                              "plugin-manager.scm"
+                              #false
+                              #true)])
+    (smith-forge-install! manager #true)
+    "updated smith.hx; restart Helix or reload Steel configuration"))
 
-(define (update-plugin-spec plugin [dirty-action "ask"])
-  (let* ([directory (plugin-directory plugin)]
-         [action (plugin-update-action dirty-action)])
-    (ensure-plugin-directory! directory)
-    (if (plugin-local-changes? directory)
-        (cond
-          [(equal? action "discard")
-           (discard-plugin-local-changes! directory)
-           (run-git (list "pull" "--ff-only") directory)
-           (string-append "discarded local changes and updated " (plugin-name plugin))]
-          [(equal? action "cancel")
-           (string-append "skipped " (plugin-name plugin) " (local changes kept)")]
-          [else
-           (plugin-update-local-changes-message (list plugin))])
-        (begin
-          (run-git (list "pull" "--ff-only") directory)
-          (string-append "updated " (plugin-name plugin))))))
+(define (smith-commit plugin)
+  (trim (smith-run-command "git"
+                           (list "rev-parse" "HEAD")
+                           (smith-plugin-directory plugin))))
 
-(define (update-plugins plugins [dirty-action "ask"])
+(define (smith-lock-entry plugin)
+  (list (smith-plugin-name plugin)
+        (smith-plugin-source plugin)
+        (smith-plugin-entry plugin)
+        (smith-plugin-enabled? plugin)
+        (smith-commit plugin)))
+
+;;@doc
+;; Write the exact installed commit of every Smith-managed plugin.
+(define (smith-lock [path #false])
+  (let* ([target (or path (smith-lock-path))]
+         [entries (map smith-lock-entry (smith-registry))]
+         [port (open-output-file target #:exists 'truncate)])
+    (write entries port)
+    (display "\n" port)
+    (close-port port)
+    (string-append "locked "
+                   (to-string (length entries))
+                   " plugins to "
+                   target)))
+
+(define (smith-read-lock path)
+  (unless (path-exists? path)
+    (error (string-append "Smith lock file not found: " path)))
+  (let ([port (open-input-file path)])
+    (let ([entries (read port)])
+      (close-port port)
+      entries)))
+
+(define (smith-restore-entry entry)
+  (let* ([name (list-ref entry 0)]
+         [source (list-ref entry 1)]
+         [plugin-entry (list-ref entry 2)]
+         [enabled? (list-ref entry 3)]
+         [revision (list-ref entry 4)]
+         [plugin (smith-make-plugin name source plugin-entry revision enabled?)])
+    (smith-forge-install! plugin #true)
+    (smith-run-command "git"
+                       (list "checkout" "--detach" revision)
+                       (smith-plugin-directory plugin))
+    (unless (equal? revision (smith-commit plugin))
+      (error (string-append "failed to restore " name " at " revision)))
+    plugin))
+
+;;@doc
+;; Restore all locked plugins at their exact commits and replace the registry.
+(define (smith-restore [path #false])
+  (let* ([source (or path (smith-lock-path))]
+         [plugins (map smith-restore-entry (smith-read-lock source))])
+    (smith-save-registry! plugins)
+    (smith-load-enabled plugins)
+    (string-append "restored "
+                   (to-string (length plugins))
+                   " plugins from "
+                   source)))
+
+(define (smith-update-spec plugin [dirty-action "ask"])
+  (smith-forge-install! plugin #true)
+  (string-append "updated " (smith-plugin-name plugin)))
+
+(define (smith-update-all plugins [dirty-action "ask"])
   (string-join
-    (map (lambda (plugin) (update-plugin-spec plugin dirty-action)) plugins)
+    (map (lambda (plugin) (smith-update-spec plugin dirty-action)) plugins)
     "\n"))
 
 ;;@doc
 ;; Update one plugin by name, or every installed plugin when no name is given.
-(define (plugin-update [name #false] [dirty-action "ask"])
-  (let* ([plugins (plugin-registry)]
-         [action (plugin-update-action dirty-action)])
+(define (smith-update [name #false] [dirty-action "ask"])
+  (let ([plugins (smith-registry)])
     (if name
-        (let ([plugin (find-plugin-spec name plugins)])
+        (let ([plugin (smith-find-spec name plugins)])
           (unless plugin (error (string-append "unknown plugin: " name)))
-          (update-plugin-spec plugin action))
+          (smith-update-spec plugin dirty-action))
         (if (null? plugins)
             "No plugins installed"
-            (let ([dirty (dirty-plugins plugins)])
-              (if (and (equal? action "ask") (not (null? dirty)))
-                  (plugin-update-local-changes-message dirty)
-                  (update-plugins plugins action)))))))
+            (smith-update-all plugins dirty-action)))))
 
 ;;@doc
-;; Remove a plugin from the registry. By default, the cloned repository is also deleted.
-(define (plugin-remove name [delete-files? #true])
-  (let* ([plugins (plugin-registry)]
-         [plugin (find-plugin-spec name plugins)])
+;; Remove a plugin from the registry and uninstall its Forge package by default.
+(define (smith-remove name [delete-files? #true])
+  (let* ([plugins (smith-registry)]
+         [plugin (smith-find-spec name plugins)])
     (unless plugin (error (string-append "unknown plugin: " name)))
-    (when (and delete-files? (path-exists? (plugin-path name)))
-      (delete-directory! (plugin-path name)))
-    (save-registry! (remove-plugin-spec name plugins))
+    (when (and delete-files? (path-exists? (smith-plugin-path name)))
+      (smith-run-forge (list "pkg" "uninstall" name)))
+    (smith-save-registry! (smith-remove-spec name plugins))
     (string-append "removed " name)))
 
-(define (set-plugin-enabled! name enabled?)
-  (let* ([plugins (plugin-registry)]
-         [plugin (find-plugin-spec name plugins)])
+(define (smith-set-enabled! name enabled?)
+  (let* ([plugins (smith-registry)]
+         [plugin (smith-find-spec name plugins)])
     (unless plugin (error (string-append "unknown plugin: " name)))
-    (let ([updated (make-plugin (plugin-name plugin)
-                                (plugin-source plugin)
-                                (plugin-entry plugin)
-                                (plugin-branch plugin)
+    (let ([updated (smith-make-plugin (smith-plugin-name plugin)
+                                (smith-plugin-source plugin)
+                                (smith-plugin-entry plugin)
+                                (smith-plugin-branch plugin)
                                 enabled?)])
-      (save-registry! (replace-plugin-spec updated plugins))
+      (smith-save-registry! (smith-replace-spec updated plugins))
       updated)))
 
 ;;@doc
-;; Enable a plugin for future `plugin-load-all` calls.
-(define (plugin-enable name)
-  (let ([plugin (set-plugin-enabled! name #true)])
-    (load-plugin-spec plugin)
+;; Enable a plugin for future `smith-load-all` calls.
+(define (smith-enable name)
+  (let ([plugin (smith-set-enabled! name #true)])
+    (smith-load-spec plugin)
     (string-append "enabled " name)))
 
 ;;@doc
-;; Disable a plugin for future `plugin-load-all` calls. This does not unload code
+;; Disable a plugin for future `smith-load-all` calls. This does not unload code
 ;; already evaluated in the current Steel engine.
-(define (plugin-disable name)
-  (set-plugin-enabled! name #false)
+(define (smith-disable name)
+  (smith-set-enabled! name #false)
   (string-append "disabled " name))
 
 ;;@doc
 ;; Load one installed plugin by name.
-(define (plugin-load name)
-  (let ([plugin (find-plugin-spec name (plugin-registry))])
+(define (smith-load name)
+  (let ([plugin (smith-find-spec name (smith-registry))])
     (unless plugin (error (string-append "unknown plugin: " name)))
-    (load-plugin-spec plugin)))
+    (smith-load-spec plugin)))
 
-(define (load-enabled plugins)
+(define (smith-load-enabled plugins)
   (cond
     [(null? plugins) '()]
-    [(plugin-enabled? (car plugins))
-     (cons (load-plugin-spec (car plugins)) (load-enabled (cdr plugins)))]
-    [else (load-enabled (cdr plugins))]))
+    [(smith-plugin-enabled? (car plugins))
+     (cons (smith-load-spec (car plugins)) (smith-load-enabled (cdr plugins)))]
+    [else (smith-load-enabled (cdr plugins))]))
 
 ;;@doc
 ;; Load every enabled plugin from the registry. Put this in init.scm for startup loading.
-(define (plugin-load-all)
-  (let ([loaded (load-enabled (plugin-registry))])
+(define (smith-load-all)
+  (let ([loaded (smith-load-enabled (smith-registry))])
     (if (null? loaded)
         "No enabled plugins"
         (string-join loaded "\n"))))
 
-(define (plugin->line plugin)
-  (string-append (plugin-name plugin)
+(define (smith-spec->line plugin)
+  (string-append (smith-plugin-name plugin)
                  " ["
-                 (if (plugin-enabled? plugin) "enabled" "disabled")
+                 (if (smith-plugin-enabled? plugin) "enabled" "disabled")
                  "] "
-                 (plugin-source plugin)
+                 (smith-plugin-source plugin)
                  " -> "
-                 (plugin-entry plugin)))
+                 (smith-plugin-entry plugin)))
 
 ;;@doc
 ;; Show installed plugins.
-(define (plugin-list)
-  (let ([plugins (plugin-registry)])
+(define (smith-list)
+  (let ([plugins (smith-registry)])
     (if (null? plugins)
         "No plugins installed"
-        (string-join (map plugin->line plugins) "\n"))))
+        (string-join (map smith-spec->line plugins) "\n"))))
