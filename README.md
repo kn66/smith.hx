@@ -27,7 +27,7 @@ forge pkg install --git https://github.com/kn66/smith.hx.git
 ```
 
 No copy, symlink, or installer script is required. Forge installs the module as
-`smith.hx/plugin-manager.scm` under Steel's `cogs` directory.
+`smith.hx/smith.scm` under Steel's `cogs` directory.
 
 ## Declare plugins in init.scm
 
@@ -38,7 +38,7 @@ and keybindings to the Helix Steel `init.scm`. This example installs
 `Space e`:
 
 ```scheme
-(require (only-in "smith.hx/plugin-manager.scm"
+(require (only-in "smith.hx/smith.scm"
                   smith-plugin
                   smith-prune
                   smith-init))
@@ -90,7 +90,7 @@ To use commands such as `:smith-list` and `:smith-prune`, expose the manager
 functions from the Helix Steel `helix.scm`:
 
 ```scheme
-(require (only-in "smith.hx/plugin-manager.scm"
+(require (only-in "smith.hx/smith.scm"
                   smith-install
                   smith-init
                   smith-self-update

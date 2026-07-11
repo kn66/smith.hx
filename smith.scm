@@ -470,7 +470,7 @@
 (define (smith-self-update [ignored #false])
   (let ([manager (smith-make-plugin "smith.hx"
                               *smith-source*
-                              "plugin-manager.scm"
+                              "smith.scm"
                               #false
                               #true)])
     (smith-forge-install! manager #true)
