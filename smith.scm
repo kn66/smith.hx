@@ -1,4 +1,6 @@
 (require "helix/static.scm")
+(require (prefix-in helix. "helix/commands.scm"))
+(require (prefix-in helix.editor. "helix/editor.scm"))
 (require (prefix-in helix.misc. "helix/misc.scm"))
 (require (prefix-in keymaps. "helix/keymaps.scm"))
 (require "steel/result")
@@ -758,10 +760,17 @@
                  " -> "
                  (smith-plugin-entry plugin)))
 
-;;@doc
-;; Show installed plugins.
-(define (smith-list)
+(define (smith-list-text)
   (let ([plugins (smith-registry)])
     (if (null? plugins)
         "No plugins installed"
         (string-join (map smith-spec->line plugins) "\n"))))
+
+;;@doc
+;; Show installed plugins in a scratch buffer.
+(define (smith-list)
+  (let ([content (smith-list-text)])
+    (helix.new)
+    (helix.editor.set-scratch-buffer-name! "*smith-list*")
+    (insert_string (string-append content "\n"))
+    (helix.goto-line 1)))

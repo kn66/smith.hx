@@ -5,6 +5,15 @@ A declarative Helix plugin manager backed by Steel's
 Plugins listed in `init.scm` are installed with Forge and loaded at startup.
 Manager-owned packages removed from `init.scm` are uninstalled as a group.
 
+## Demo
+
+Declare plugins in `init.scm`, then use `:smith-list` to inspect the managed
+plugins in the `*smith-list*` scratch buffer:
+
+![smith.hx plugin declaration and list demo](assets/smith-list-demo.gif)
+
+![smith.hx plugin declaration and list](assets/smith-list.png)
+
 ## Requirements
 
 - Helix built with Steel support
@@ -147,6 +156,9 @@ Available commands include:
 :smith-lock
 :smith-restore
 ```
+
+`smith-list` opens the installed plugin list in a scratch buffer named
+`*smith-list*`.
 
 `smith-update` reinstalls managed plugins with Forge's `--force` option.
 `smith-self-update` similarly reinstalls this manager through Forge; reload
