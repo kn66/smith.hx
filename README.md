@@ -44,15 +44,17 @@ and keybindings to the Helix Steel `init.scm`. This example installs
                   smith-init))
 
 (smith-plugin "https://github.com/Ra77a3l3-jar/forest.hx.git"
-  ;; Use 'right instead of 'left to move the sidebar.
-  (forest-configure! 'left #:ignore (list ".git" "target" "__pycache__"))
+  (config
+   ;; Use 'right instead of 'left to move the sidebar.
+   (forest-configure! 'left #:ignore (list ".git" "target" "__pycache__"))
 
-  ;; Select 'snacks (persistent sidebar) or 'mini (floating).
-  (forest-set-style! 'snacks)
+   ;; Select 'snacks (persistent sidebar) or 'mini (floating).
+   (forest-set-style! 'snacks))
 
-  ;; Open or focus forest.hx with Space e in normal mode.
-  (keymap (global)
-          (normal (space (e ":forest-open")))))
+  ;; Open or focus forest.hx with Space e in normal mode. Bindings are data,
+  ;; so the keymap macro does not cross Smith's delayed evaluation boundary.
+  (bind
+   ("normal" ("space" "e") ":forest-open")))
 
 ;; Synchronize after every smith-plugin declaration has been evaluated.
 (smith-init)
@@ -72,10 +74,14 @@ uses `forest.scm` as its entry.
 For an unconventional package, the explicit form remains available as
 `(smith-plugin (source package-name entry-file [revision]) ...)`.
 
-Configuration forms inside `smith-plugin` are quoted by the macro and evaluated
-only after the package has been installed and loaded. This keeps installation,
-custom variables, and keybindings in one declaration without manual
-`eval-string` calls.
+Forms under `(init ...)` run directly in the normal `init.scm` environment before
+the package is installed or loaded, so they must not reference plugin exports.
+Configuration forms under `(config ...)` are quoted by `smith-plugin` and
+evaluated only after the package has been installed and loaded. Global bindings
+under `(bind ...)` use `(mode (key ...) command)` data and are registered without
+passing Helix's `keymap` macro through delayed evaluation. Clauses may appear in
+any order and each clause may appear once; Smith always executes them as `init`,
+load, `config`, then `bind`.
 
 When one or more declarations were evaluated, `smith-init` removes
 manager-owned packages absent from the declarations. Forge packages installed

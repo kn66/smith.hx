@@ -1,5 +1,6 @@
 (require "helix/static.scm")
 (require (prefix-in helix.misc. "helix/misc.scm"))
+(require (prefix-in keymaps. "helix/keymaps.scm"))
 (require "steel/result")
 (require-builtin steel/filesystem)
 (require-builtin steel/process)
@@ -399,24 +400,155 @@
           (helix.misc.set-warning! message)
           message))))
 
-;;@doc
 ;; Declare, install, load, and configure a plugin in one init.scm block.
 ;; The tuple is (source package-name entry-file) or
 ;; (source package-name entry-file revision).
-(define-syntax smith-plugin
+(define-syntax smith-declare-plugin
   (syntax-rules ()
-    [(smith-plugin (source name entry branch) form ...)
+    [(smith-declare-plugin (source name entry branch) form ...)
      (begin
        (smith-ensure source name entry branch)
        (smith-configure! name '(form ...)))]
-    [(smith-plugin (source name entry) form ...)
+    [(smith-declare-plugin (source name entry) form ...)
      (begin
        (smith-ensure source name entry)
        (smith-configure! name '(form ...)))]
-    [(smith-plugin source form ...)
+    [(smith-declare-plugin source form ...)
      (begin
        (smith-ensure source)
        (smith-configure-source! source '(form ...)))]))
+
+(define (smith-string-list? values)
+  (cond
+    [(null? values) #true]
+    [(string? (car values)) (smith-string-list? (cdr values))]
+    [else #false]))
+
+(define (smith-nested-binding keys command)
+  (if (null? (cdr keys))
+      (hash (car keys) command)
+      (hash (car keys) (smith-nested-binding (cdr keys) command))))
+
+(define (smith-apply-binding! binding)
+  (unless (and (list? binding)
+               (= (length binding) 3)
+               (string? (list-ref binding 0))
+               (list? (list-ref binding 1))
+               (not (null? (list-ref binding 1)))
+               (smith-string-list? (list-ref binding 1))
+               (or (string? (list-ref binding 2))
+                   (symbol? (list-ref binding 2))))
+    (error
+      (string-append
+        "invalid Smith binding: "
+        (to-string binding)
+        "; expected (mode (key ...) command)")))
+  (keymaps.add-global-keybinding
+    (hash (list-ref binding 0)
+          (smith-nested-binding (list-ref binding 1)
+                                (list-ref binding 2)))))
+
+;; Register declarative global bindings without evaluating the keymap macro.
+;; Each binding is (mode (key ...) command), for example
+;; '("normal" ("space" "e") ":forest-open").
+(define (smith-apply-bindings! bindings)
+  (for-each smith-apply-binding! bindings)
+  (string-append "registered "
+                 (to-string (length bindings))
+                 " Smith keybindings"))
+
+;; Expand normalized phases. Init forms stay as syntax in the caller's
+;; environment; config forms become data for delayed evaluation after loading.
+(define-syntax smith-plugin-phases
+  (syntax-rules ()
+    [(smith-plugin-phases spec (init-form ...) (config-form ...) ())
+     (begin
+       init-form ...
+       (smith-declare-plugin spec config-form ...))]
+    [(smith-plugin-phases spec
+                          (init-form ...)
+                          (config-form ...)
+                          (binding ...))
+     (begin
+       init-form ...
+       (smith-declare-plugin spec config-form ...)
+       (smith-apply-bindings! '(binding ...)))]))
+
+;;@doc
+;; Declare a plugin using separate initialization, post-load configuration, and
+;; binding phases. Clauses may appear in any order. Forms in (init ...) run in
+;; the caller's environment before installation/loading; forms in (config ...)
+;; are evaluated after loading; (bind ...) accepts declarative global bindings.
+(define-syntax smith-plugin
+  (syntax-rules (init config bind)
+    [(smith-plugin spec
+                   (init init-form ...)
+                   (config config-form ...)
+                   (bind binding ...))
+     (smith-plugin-phases spec
+                          (init-form ...)
+                          (config-form ...)
+                          (binding ...))]
+    [(smith-plugin spec
+                   (init init-form ...)
+                   (bind binding ...)
+                   (config config-form ...))
+     (smith-plugin-phases spec
+                          (init-form ...)
+                          (config-form ...)
+                          (binding ...))]
+    [(smith-plugin spec
+                   (config config-form ...)
+                   (init init-form ...)
+                   (bind binding ...))
+     (smith-plugin-phases spec
+                          (init-form ...)
+                          (config-form ...)
+                          (binding ...))]
+    [(smith-plugin spec
+                   (config config-form ...)
+                   (bind binding ...)
+                   (init init-form ...))
+     (smith-plugin-phases spec
+                          (init-form ...)
+                          (config-form ...)
+                          (binding ...))]
+    [(smith-plugin spec
+                   (bind binding ...)
+                   (init init-form ...)
+                   (config config-form ...))
+     (smith-plugin-phases spec
+                          (init-form ...)
+                          (config-form ...)
+                          (binding ...))]
+    [(smith-plugin spec
+                   (bind binding ...)
+                   (config config-form ...)
+                   (init init-form ...))
+     (smith-plugin-phases spec
+                          (init-form ...)
+                          (config-form ...)
+                          (binding ...))]
+    [(smith-plugin spec (init init-form ...) (config config-form ...))
+     (smith-plugin-phases spec (init-form ...) (config-form ...) ())]
+    [(smith-plugin spec (config config-form ...) (init init-form ...))
+     (smith-plugin-phases spec (init-form ...) (config-form ...) ())]
+    [(smith-plugin spec (init init-form ...) (bind binding ...))
+     (smith-plugin-phases spec (init-form ...) () (binding ...))]
+    [(smith-plugin spec (bind binding ...) (init init-form ...))
+     (smith-plugin-phases spec (init-form ...) () (binding ...))]
+    [(smith-plugin spec (config config-form ...) (bind binding ...))
+     (smith-plugin-phases spec () (config-form ...) (binding ...))]
+    [(smith-plugin spec (bind binding ...) (config config-form ...))
+     (smith-plugin-phases spec () (config-form ...) (binding ...))]
+    [(smith-plugin spec (init init-form ...))
+     (smith-plugin-phases spec (init-form ...) () ())]
+    [(smith-plugin spec (config config-form ...))
+     (smith-plugin-phases spec () (config-form ...) ())]
+    [(smith-plugin spec (bind binding ...))
+     (smith-plugin-phases spec () () (binding ...))]
+    [(smith-plugin spec)
+     (smith-plugin-phases spec () () ())]))
 
 ;;@doc
 ;; Remove every manager-owned Forge package not declared by smith-ensure during
