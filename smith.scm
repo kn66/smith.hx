@@ -35,7 +35,7 @@
     [else
      (let ([left (trim-end-matches (car parts) "/")]
            [right (trim-start-matches (apply smith-path-join (cdr parts)) "/")])
-       (string-append left "/" right))]))
+       (string-append left (path-separator) right))]))
 
 (define (smith-config-root)
   (parent-name (get-init-scm-path)))
